@@ -14,8 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ekstrak ZIP
-        run: unzip -q BilliardTycoon3D.zip
+      - name: Cari dan ekstrak ZIP (nama bebas)
+        run: |
+          echo "File di repo:"; ls -la
+          ZIP="$(find . -maxdepth 2 -iname '*.zip' | head -1)"
+          if [ -z "$ZIP" ]; then echo "ERROR: tidak ada file .zip di repo. Unggah zip-nya dulu."; exit 1; fi
+          echo "Memakai: $ZIP"
+          mkdir -p /tmp/src && unzip -q "$ZIP" -d /tmp/src
+          CFG="$(find /tmp/src -name capacitor.config.json -not -path '*/node_modules/*' | head -1)"
+          if [ -z "$CFG" ]; then echo "ERROR: capacitor.config.json tidak ditemukan di zip"; exit 1; fi
+          echo "APP_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -27,7 +35,7 @@ jobs:
           java-version: 17
 
       - name: Install dan siapkan
-        working-directory: BilliardTycoon3D
+        working-directory: ${{ env.APP_DIR }}
         run: |
           npm install
           npm run copy-three
@@ -35,13 +43,13 @@ jobs:
           npx cap sync android
 
       - name: Build APK debug
-        working-directory: BilliardTycoon3D/android
+        working-directory: ${{ env.APP_DIR }}/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
 
       - name: Ganti nama APK
-        run: cp BilliardTycoon3D/android/app/build/outputs/apk/debug/app-debug.apk BilliardTycoon3D.apk
+        run: cp "$APP_DIR/android/app/build/outputs/apk/debug/app-debug.apk" BilliardTycoon3D.apk
 
       - name: Upload APK (Artifacts)
         uses: actions/upload-artifact@v4
