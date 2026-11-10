@@ -1,0 +1,58 @@
+name: Build APK dari ZIP
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ekstrak ZIP
+        run: unzip -q BilliardTycoon3D.zip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dan siapkan
+        working-directory: BilliardTycoon3D
+        run: |
+          npm install
+          npm run copy-three
+          npx cap add android
+          npx cap sync android
+
+      - name: Build APK debug
+        working-directory: BilliardTycoon3D/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Ganti nama APK
+        run: cp BilliardTycoon3D/android/app/build/outputs/apk/debug/app-debug.apk BilliardTycoon3D.apk
+
+      - name: Upload APK (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BilliardTycoon3D-apk
+          path: BilliardTycoon3D.apk
+
+      - name: Rilis APK (tab Releases)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: terbaru
+          name: Billiard Tycoon 3D (build terbaru)
+          files: BilliardTycoon3D.apk
+          
