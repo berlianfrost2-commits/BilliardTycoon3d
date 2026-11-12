@@ -49,6 +49,11 @@ jobs:
           npm install
           npm run copy-three
 
+      - name: Pasang plugin Google Play Billing
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          npm install @capgo/native-purchases@8 --save || npm install @capgo/native-purchases@latest --save --legacy-peer-deps
+
       - name: Tulis konfigurasi (URL kebijakan privasi)
         working-directory: ${{ env.APP_DIR }}
         env:
