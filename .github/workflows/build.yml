@@ -1,4 +1,4 @@
-name: Build APK dari ZIP
+name: Build Android (APK + AAB)
 
 on:
   push:
@@ -11,56 +11,120 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cari dan ekstrak ZIP (nama bebas)
+      - name: Siapkan proyek (repo biasa atau file ZIP)
         run: |
-          echo "File di repo:"; ls -la
-          ZIP="$(find . -maxdepth 2 -iname '*.zip' | head -1)"
-          if [ -z "$ZIP" ]; then echo "ERROR: tidak ada file .zip di repo. Unggah zip-nya dulu."; exit 1; fi
-          echo "Memakai: $ZIP"
-          mkdir -p /tmp/src && unzip -q "$ZIP" -d /tmp/src
-          CFG="$(find /tmp/src -name capacitor.config.json -not -path '*/node_modules/*' | head -1)"
-          if [ -z "$CFG" ]; then echo "ERROR: capacitor.config.json tidak ditemukan di zip"; exit 1; fi
-          echo "APP_DIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
+          if [ -f capacitor.config.json ]; then
+            APP_DIR="$PWD"
+          else
+            ZIP="$(find . -maxdepth 2 -iname "*.zip" | head -1)"
+            if [ -z "$ZIP" ]; then echo "ERROR: tidak ada file .zip atau capacitor.config.json di repo"; exit 1; fi
+            echo "Memakai: $ZIP"
+            mkdir -p /tmp/src && unzip -q "$ZIP" -d /tmp/src
+            CFG="$(find /tmp/src -name capacitor.config.json -not -path "*/node_modules/*" | head -1)"
+            if [ -z "$CFG" ]; then echo "ERROR: capacitor.config.json tidak ada di zip"; exit 1; fi
+            APP_DIR="$(dirname "$CFG")"
+          fi
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
-      - name: Install dan siapkan
+      - name: Install dependensi
         working-directory: ${{ env.APP_DIR }}
         run: |
           npm install
           npm run copy-three
-          npx cap add android
-          npx cap sync android
 
-      - name: Build APK debug
+      - name: Tulis konfigurasi (URL kebijakan privasi)
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          PRIV_URL: ${{ vars.PRIVACY_URL }}
+        run: |
+          if [ -n "$PRIV_URL" ]; then
+            printf 'window.APP_CONFIG={privacyUrl:"%s"};\n' "$PRIV_URL" > www/config.js
+            echo "config.js ditulis"
+          fi
+
+      - name: Buat proyek Android dan ikon
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          [ -d android ] || npx cap add android
+          npx capacitor-assets generate --android || echo "Ikon otomatis gagal, memakai ikon bawaan"
+
+      - name: Atur versi (versionCode naik otomatis)
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          python3 - <<PY
+          import re
+          p="android/app/build.gradle"
+          s=open(p).read()
+          n="${{ github.run_number }}"
+          s=re.sub(r"versionCode\s*=?\s*\d+","versionCode "+n,s)
+          s=re.sub(r"versionName\s*=?\s*\"[^\"]*\"","versionName \"1.0."+n+"\"",s)
+          open(p,"w").write(s)
+          print("versionCode",n)
+          PY
+
+      - name: Sync Capacitor
+        working-directory: ${{ env.APP_DIR }}
+        run: npx cap sync android
+
+      - name: Build APK debug (untuk uji di HP)
         working-directory: ${{ env.APP_DIR }}/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Ganti nama APK
-        run: cp "$APP_DIR/android/app/build/outputs/apk/debug/app-debug.apk" BilliardTycoon3D.apk
+      - name: Build AAB rilis (untuk Play Store)
+        working-directory: ${{ env.APP_DIR }}/android
+        run: ./gradlew bundleRelease
+
+      - name: Tanda tangani AAB (jika kunci tersedia)
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore "$RUNNER_TEMP/upload.jks" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" android/app/build/outputs/bundle/release/app-release.aab "$KEY_ALIAS"
+            cp android/app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/BilliardBusinessTycoon3D.aab"
+            echo "AAB ditandatangani"
+          else
+            echo "Secret KEYSTORE_BASE64 belum diisi: AAB tidak ditandatangani (lihat PANDUAN_PLAYSTORE.md)"
+          fi
+
+      - name: Siapkan APK
+        run: cp "$APP_DIR/android/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/BilliardBusinessTycoon3D.apk"
+
+      - name: Upload AAB (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BilliardBusinessTycoon3D-AAB
+          path: BilliardBusinessTycoon3D.aab
+          if-no-files-found: ignore
 
       - name: Upload APK (Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: BilliardTycoon3D-apk
-          path: BilliardTycoon3D.apk
+          name: BilliardBusinessTycoon3D-APK
+          path: BilliardBusinessTycoon3D.apk
 
       - name: Rilis APK (tab Releases)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: terbaru
-          name: Billiard Tycoon 3D (build terbaru)
-          files: BilliardTycoon3D.apk
+          name: Billiard Business Tycoon 3D (build terbaru)
+          files: BilliardBusinessTycoon3D.apk
           
